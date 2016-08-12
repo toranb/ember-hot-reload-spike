@@ -3,6 +3,17 @@ import HotComponentMixin from 'ember-hot-reload-spike/mixins/hot-component';
 
 const { getOwner } = Ember;
 
+const nameExpression = /(.*)@.*:(.*):/;
+function getTemplatePath (constructor) {
+  let constructorString = constructor.toString();
+  let [, namespace, componentName] = constructorString.match(nameExpression) || [];
+  if (namespace && componentName) {
+    // Quick hack for now, we need to instead remove it from the container and then use the resolver *again*
+    // so it actually works with PODs or custom resolvers.
+    return `${namespace}/templates/components/${componentName}`;
+  }
+}
+
 function clearCache (wrapper) {
   const name = `component:${wrapper.get('wrappedComponentName')}`;
   const owner = getOwner(wrapper);
@@ -16,6 +27,32 @@ function clearCache (wrapper) {
   owner.base.__container__.factoryCache[name] = undefined;
   owner.base.__registry__._resolveCache[name] = undefined;
   owner.base.__registry__._failCache[name] = undefined;
+}
+
+function clearTemplateCache (wrapper) {
+  const owner = getOwner(wrapper);
+  const templateName = `template:components/${wrapper.get('wrappedComponentName')}`;
+  owner.__container__.cache[templateName] = undefined;
+  owner.__container__.factoryCache[templateName] = undefined;
+  owner.__registry__._resolveCache[templateName] = undefined;
+  owner.__registry__._failCache[templateName] = undefined;
+
+  owner.base.__container__.cache[templateName] = undefined;
+  owner.base.__container__.factoryCache[templateName] = undefined;
+  owner.base.__registry__._resolveCache[templateName] = undefined;
+  owner.base.__registry__._failCache[templateName] = undefined;
+}
+
+function getTemplateRequirePath(moduleName) {
+    var requirePath = 'dummy/templates/components/mixed-thing';
+    if (moduleName.indexOf('demoapp') !== -1) {
+        requirePath = 'demoapp/components/mixed-thing/template';
+    }
+    var module = require(requirePath, null, null, true /* force sync */);
+    if (module && module['default']) {
+      module = module['default'];
+    }
+    return module;
 }
 
 const HotReplacementComponent = Ember.Component.extend(HotComponentMixin, {
@@ -51,15 +88,34 @@ const HotReplacementComponent = Ember.Component.extend(HotComponentMixin, {
     `);
   }).volatile(),
 
-  __rerenderOnTemplateUpdate (/*moduleName*/) {
-    this._super(...arguments);
-      clearCache(this);
-      const wrappedComponentName = this.get('wrappedComponentName');
-      this.set('wrappedComponentName', undefined);
-      this.rerender();
-      Ember.run.later(()=> {
-        this.set('wrappedComponentName', wrappedComponentName);
-      });
+  __rerenderOnTemplateUpdate (moduleName) {
+      this._super(...arguments);
+      var wrappedComponentName = this.get('wrappedComponentName');
+      if (moduleName.indexOf('.hbs') > -1) {
+          //we need a much better compare conditional :)
+          const templatePath = getTemplatePath(this.constructor);
+          var shortModulePath = moduleName.split('/app/components')[1];
+          var shortNonPodsPath = moduleName.split('/app/templates/components')[1];
+          var requestedComponentName = shortModulePath ? shortModulePath.split('/')[1] : shortNonPodsPath.split('.hbs')[0];
+          if (templatePath.indexOf(requestedComponentName) !== -1) {
+              console.log('fired hbs reload for ', shortModulePath);
+              clearTemplateCache(this);
+              this.set('wrappedComponentName', undefined);
+              var reloadedLayout = getTemplateRequirePath(moduleName);
+              this.set('layout', reloadedLayout);
+              Ember.run.later(()=> {
+                this.set('wrappedComponentName', wrappedComponentName);
+              });
+          }
+      }else{
+          // if (moduleName === wrappedComponentName) {}
+          clearCache(this);
+          this.set('wrappedComponentName', undefined);
+          this.rerender();
+          Ember.run.later(()=> {
+            this.set('wrappedComponentName', wrappedComponentName);
+          });
+      }
   }
 });
 
